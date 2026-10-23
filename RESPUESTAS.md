@@ -122,3 +122,65 @@ Alumno/a: _(completar)_
 | Permiso de red local (`ACCESS_LOCAL_NETWORK`) | Android 17 (API 37) | Declararlo y pedirlo si la app se comunica con dispositivos de la red local. |
 
 **targetSdkVersion:** indica la versión de Android para la que se compiló y probó la app; el sistema aplica los comportamientos (y permisos) de esa versión. Expo SDK 57 apunta a la API 36 (Android 16), y desde el 31 de agosto de 2026 Google Play exige ese nivel de API (o superior) para publicar y actualizar apps.
+
+## Parte C · iOS: textos de propósito y acceso parcial
+
+### C1. Claves del Info.plist
+
+| Recurso | Clave en Info.plist |
+|---|---|
+| Cámara | `NSCameraUsageDescription` |
+| Micrófono | `NSMicrophoneUsageDescription` |
+| Ubicación en uso | `NSLocationWhenInUseUsageDescription` |
+| Ubicación siempre | `NSLocationAlwaysAndWhenInUseUsageDescription` |
+| Fotos (leer) | `NSPhotoLibraryUsageDescription` |
+| Fotos (solo guardar) | `NSPhotoLibraryAddUsageDescription` |
+| Contactos | `NSContactsUsageDescription` |
+| Face ID | `NSFaceIDUsageDescription` |
+| Rastreo entre apps (ATT) | `NSUserTrackingUsageDescription` |
+| Notificaciones | No lleva clave. |
+
+### C2. Sin texto, no hay permiso
+
+**a)** Si falta el texto y la app intenta usar la cámara, iOS **cierra la app** (crash). Al subir la build a App Store Connect, Apple la rechaza con el error **ITMS-90683** (*Missing Purpose String in Info.plist*).
+
+**b)** **Una sola vez.** Si la persona dice que no, a la app solo le queda ofrecer una alternativa y, si quiere que cambie de idea, llevarla a Ajustes.
+
+**c)** El sistema arma el título ("«App» quiere acceder a la cámara") y los botones; vos escribís la **línea de explicación** (el texto de propósito). En Expo se configura en el plugin de cada módulo (por ejemplo `cameraPermission`) o en `ios.infoPlist` de `app.json`.
+
+**d)** Apple analiza el binario completo, incluidas las librerías: si una contiene la API protegida, exige el texto aunque tu código nunca la llame. Se resuelve agregando el texto de propósito de todos modos (o quitando la librería/el permiso que la dispara).
+
+### C3. Probador de textos de propósito
+
+| Texto propuesto | ¿Aprobado? | Versión mejorada |
+|---|---|---|
+| "Necesitamos tu ubicación." | No: no dice para qué. | "Usamos tu ubicación para mostrarte las farmacias de turno más cercanas." |
+| "Para mejorar tu experiencia." | No: es vago y genérico. | "Usamos tu ubicación para ordenar los resultados por cercanía." |
+| "Usamos tu ubicación para mostrarte las farmacias de turno más cercanas." | Sí: nombra el dato y el beneficio concreto. | — |
+| "La app no funciona sin ubicación." | No: es una exigencia, no explica el beneficio. | "Usamos tu ubicación para marcar dónde está el problema que reportás." |
+| "Ubicación requerida por el sistema." | No: es falso (no lo exige el sistema) y no da un beneficio. | "Usamos tu ubicación para encontrar los puntos de reciclaje de tu barrio." |
+
+### C4. Acceso parcial y gradual
+
+| Caso | iOS | En Expo |
+|---|---|---|
+| Fotos limitadas ("Seleccionar fotos") | iOS 14 | `accessPrivileges: 'limited'` en la respuesta de `expo-media-library` / `expo-image-picker`. |
+| Ubicación aproximada (interruptor "Precisa") | iOS 14 | `ios.accuracy` en la respuesta de `Location.getForegroundPermissionsAsync()` (`accuracy: 'reduced'`). |
+| "Permitir una vez" (ubicación) | iOS 14 | `status: 'granted'`; el permiso dura una sesión y vuelve a `undetermined` al reabrir la app. |
+| Ubicación escalonada: de "al usar la app" a "Siempre" | iOS 13.4 | `Location.requestBackgroundPermissionsAsync()` después de `requestForegroundPermissionsAsync()`. |
+| Notificaciones provisionales | iOS 12 | `requestPermissionsAsync({ ios: { allowProvisional: true } })` y `ios.status === Notifications.IosAuthorizationStatus.PROVISIONAL`. |
+| Rastreo entre apps (ATT) | iOS 14.5 | `expo-tracking-transparency`: `requestTrackingPermissionsAsync()`. |
+
+Expo SDK 57 requiere **iOS 16.4** como mínimo. En la práctica, todos los casos de la tabla (iOS 12 a 14.5) están disponibles siempre, sin necesidad de comprobar la versión.
+
+### C5. Android vs iOS, lado a lado
+
+| | Android | iOS |
+|---|---|---|
+| ¿Dónde se declara? | `AndroidManifest.xml` (`uses-permission`). | `Info.plist` (textos de propósito). |
+| Texto en el diálogo | No se puede poner texto propio. | Sí: el texto de propósito. |
+| Oportunidades para preguntar | Hasta dos (desde Android 11, tras dos rechazos queda bloqueado). | Una sola. |
+| "Solo esta vez" / "Permitir una vez" | "Solo esta vez" (ubicación, cámara, micrófono). | "Permitir una vez" (ubicación, desde iOS 14). |
+| Notificaciones | Permiso de ejecución desde Android 13; requiere canal. | Diálogo propio de iOS, sin texto de propósito; admite provisionales. |
+| Ubicación en segundo plano | Permiso aparte (`ACCESS_BACKGROUND_LOCATION`), pedido después del de primer plano. | "Siempre", escalonado desde "al usar la app". |
+| Si falta la declaración | El diálogo no aparece y el permiso se deniega. | La app se cierra y la build puede ser rechazada. |
