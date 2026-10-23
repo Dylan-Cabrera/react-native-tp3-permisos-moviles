@@ -1,4 +1,5 @@
-import * as Camera from 'expo-camera';
+import type { PermissionResponse } from 'expo';
+import { Camera } from 'expo-camera';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
@@ -52,7 +53,7 @@ export async function crearCanal() {
   });
 }
 
-function leerCamara(r: Camera.PermissionResponse): Lectura {
+function leerCamara(r: PermissionResponse): Lectura {
   return { estado: clasificar(r), parcial: false };
 }
 
