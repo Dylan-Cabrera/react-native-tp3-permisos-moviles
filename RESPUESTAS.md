@@ -51,3 +51,74 @@ Alumno/a: _(completar)_
 | Concedido | `'granted'` | `true` | No hace falta |
 | Denegado (se puede volver a pedir) | `'denied'` | `true` | Sí (Android) |
 | Bloqueado | `'denied'` | `false` | No: hay que ir a Ajustes |
+
+## Parte B · Android: tipos de permisos y manifiesto
+
+### B1. Clasificá los permisos
+
+| Permiso | Tipo | ¿Cómo se obtiene? |
+|---|---|---|
+| INTERNET | De instalación (normal) | Se concede solo al instalar. |
+| CAMERA | De tiempo de ejecución (peligroso) | Diálogo en ejecución. |
+| VIBRATE | De instalación | Se concede solo al instalar. |
+| SYSTEM_ALERT_WINDOW | Especial | La persona lo habilita en una pantalla de Ajustes ("Mostrar sobre otras apps"). |
+| POST_NOTIFICATIONS | De tiempo de ejecución (Android 13+) | Diálogo en ejecución. |
+| ACCESS_NETWORK_STATE | De instalación | Se concede solo al instalar. |
+| READ_CONTACTS | De tiempo de ejecución | Diálogo en ejecución. |
+| SCHEDULE_EXACT_ALARM | Especial | Pantalla de Ajustes ("Alarmas y recordatorios"). |
+| RECORD_AUDIO | De tiempo de ejecución | Diálogo en ejecución. |
+| MANAGE_EXTERNAL_STORAGE | Especial | Pantalla de Ajustes ("Acceso a todos los archivos"); Google Play lo restringe. |
+
+### B2. Grupos y nombres
+
+**a)** Un grupo reúne permisos relacionados (por ejemplo, ubicación: fina y aproximada). Si se piden `ACCESS_FINE_LOCATION` y `ACCESS_COARSE_LOCATION` juntos, la persona ve **un solo diálogo** (con la opción de ubicación precisa o aproximada).
+
+**b)** El prefijo es `android.permission.`. El de cámara: `android.permission.CAMERA`.
+
+**c)** Los permisos de firma solo se conceden a apps firmadas con el mismo certificado que la app o el sistema que los define. No se usan en apps comunes porque solo sirven para apps del mismo fabricante o del propio sistema.
+
+### B3. Leé el manifiesto
+
+**a)** Se conceden solos: `INTERNET`. Hay que pedir en ejecución: `CAMERA`, `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`, `POST_NOTIFICATIONS` y `READ_EXTERNAL_STORAGE` (esta última solo en Android 12 o anterior).
+
+**b)** Que el permiso solo aplica hasta la API 32 (Android 12L); desde Android 13 no se declara. La reemplazan `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO` y `READ_MEDIA_AUDIO`.
+
+**c)** `tools:node="remove"` le indica al *merge* del manifiesto que elimine ese permiso aunque lo declare una librería. En `app.json`:
+
+```json
+{ "expo": { "android": { "blockedPermissions": ["android.permission.RECORD_AUDIO"] } } }
+```
+
+**d)** En `expo.android.permissions`:
+
+```json
+{ "expo": { "android": { "permissions": ["android.permission.SCHEDULE_EXACT_ALARM"] } } }
+```
+
+**e)** El archivo es generado: `prebuild` lo reescribe y los cambios manuales se pierden. La fuente de verdad es `app.json`. `blockedPermissions` **no** funciona en Expo Go, porque usa su propio manifiesto; hace falta una development build.
+
+### B4. Así pregunta Android
+
+**a)** No, el texto del diálogo lo fija el sistema. La explicación tiene que ir **antes**, en una pantalla propia de la app (pantalla previa).
+
+**b)** "Mientras la app está en uso" concede el permiso mientras la app esté visible o en primer plano; "Solo esta vez" lo concede solo hasta que la app se cierra o pasa a segundo plano un tiempo, y luego vuelve a quedar sin decidir. Existe para los permisos de ubicación, cámara y micrófono.
+
+**c)** Android 11+ interpreta dos rechazos como "no volver a preguntar": el diálogo deja de aparecer y `canAskAgain` pasa a `false`.
+
+**d)** Anda bien con la aproximada: mostrar el clima o buscar "puntos de reciclaje de tu barrio". No anda con la aproximada: navegación paso a paso o registrar un recorrido.
+
+**e)** Android **termina el proceso** de la app. Al volver, la app se reinicia y consulta el estado de nuevo.
+
+### B5. Android, versión por versión
+
+| Cambio | Versión (API) | Qué implica para el código |
+|---|---|---|
+| Nacen los permisos en tiempo de ejecución | Android 6 (API 23) | Hay que pedir los permisos peligrosos al ejecutar y contemplar que no se concedan. |
+| La ubicación en segundo plano pasa a ser un permiso aparte | Android 10 (API 29); se pide por separado desde Android 11 (API 30) | Pedir primero primer plano y luego segundo plano, en pasos separados. |
+| Dos rechazos equivalen a "no volver a preguntar" | Android 11 (API 30) | Leer `canAskAgain` y ofrecer "Abrir Ajustes" cuando es `false`. |
+| Ubicación precisa o aproximada | Android 12 (API 31) | Manejar que se conceda solo la aproximada y no exigir coordenadas exactas. |
+| Las notificaciones pasan a ser un permiso (`POST_NOTIFICATIONS`) | Android 13 (API 33) | Crear el canal y pedir el permiso antes de mostrar notificaciones. |
+| Acceso parcial a fotos y videos ("Seleccionar fotos") | Android 14 (API 34) | Contemplar acceso limitado; mejor usar el selector del sistema, que no pide permiso. |
+| Permiso de red local (`ACCESS_LOCAL_NETWORK`) | Android 17 (API 37) | Declararlo y pedirlo si la app se comunica con dispositivos de la red local. |
+
+**targetSdkVersion:** indica la versión de Android para la que se compiló y probó la app; el sistema aplica los comportamientos (y permisos) de esa versión. Expo SDK 57 apunta a la API 36 (Android 16), y desde el 31 de agosto de 2026 Google Play exige ese nivel de API (o superior) para publicar y actualizar apps.
