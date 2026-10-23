@@ -19,6 +19,8 @@ export function PrevioPermiso({
 
   if (estado === 'cargando') return <Texto suave>Cargando…</Texto>;
 
+  if (estado === 'concedido') return <Texto>El permiso de {info.titulo.toLowerCase()} ya está concedido.</Texto>;
+
   if (estado === 'bloqueado') {
     return (
       <View style={{ gap: 12 }}>
