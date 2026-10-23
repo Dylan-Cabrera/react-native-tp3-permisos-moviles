@@ -184,3 +184,104 @@ Expo SDK 57 requiere **iOS 16.4** como mínimo. En la práctica, todos los casos
 | Notificaciones | Permiso de ejecución desde Android 13; requiere canal. | Diálogo propio de iOS, sin texto de propósito; admite provisionales. |
 | Ubicación en segundo plano | Permiso aparte (`ACCESS_BACKGROUND_LOCATION`), pedido después del de primer plano. | "Siempre", escalonado desde "al usar la app". |
 | Si falta la declaración | El diálogo no aparece y el permiso se deniega. | La app se cierra y la build puede ser rechazada. |
+
+## Parte D · Expo: una API, dos plataformas
+
+### D1. Módulos y funciones
+
+| Necesidad | Módulo | Hook / función de permiso |
+|---|---|---|
+| Escanear un QR con la cámara | `expo-camera` | `useCameraPermissions()` |
+| Grabar video con sonido | `expo-camera` | `useCameraPermissions()` y `useMicrophonePermissions()` |
+| Mostrar farmacias cercanas | `expo-location` | `useForegroundPermissions()` |
+| Seguir un envío con la app en segundo plano | `expo-location` | `useBackgroundPermissions()` (después del de primer plano) |
+| Mostrar un recordatorio | `expo-notifications` | `getPermissionsAsync()` / `requestPermissionsAsync()` |
+| Grabar una nota de voz | `expo-audio` | `requestRecordingPermissionsAsync()` |
+| Galería propia dentro de la app | `expo-media-library` | `usePermissions()` |
+| Publicidad personalizada entre apps (iOS) | `expo-tracking-transparency` | `useTrackingPermissions()` |
+
+Si un tutorial usa `import * as Permissions from 'expo-permissions'`, está **desactualizado**: ese paquete fue eliminado y no se debe usar en SDK 57.
+
+### D2. Consultar, pedir y el hook
+
+**a)** `get…PermissionsAsync()` solo **consulta** el estado actual y nunca muestra un diálogo. `request…PermissionsAsync()` **pide** el permiso y es la que puede mostrar el diálogo (si el estado lo permite).
+
+**b)** El hook devuelve: `permiso` (el estado actual, o `null` hasta que se carga), `pedirPermiso` (función que solicita el permiso) y `consultarPermiso` (función que vuelve a leer el estado sin pedir). En el primer render `permiso` vale `null`, y la pantalla debe mostrar un indicador de carga.
+
+**c)** Si `canAskAgain` es `false`, `request…()` no muestra nada y devuelve enseguida el mismo estado `denied`. Llamarla en un bucle (por ejemplo, en cada render) no sirve de nada y deja la pantalla en un ciclo infinito de renders sin que la persona pueda hacer algo.
+
+### D3. Leé la respuesta
+
+| Respuesta | Qué hace la app |
+|---|---|
+| `null` | El estado todavía se está cargando: mostrar un indicador de carga. |
+| `{ status: 'granted', granted: true }` | Usar la función directamente. |
+| `{ status: 'undetermined', canAskAgain: true }` | Mostrar la pantalla previa y luego pedir el permiso. |
+| `{ status: 'denied', canAskAgain: true }` | Explicar de nuevo y ofrecer volver a pedir, más una alternativa. |
+| `{ status: 'denied', canAskAgain: false }` | Está bloqueado: explicar y ofrecer "Abrir Ajustes" y una alternativa. |
+| `{ status: 'granted', accessPrivileges: 'limited' }` | Funciona, pero solo con las fotos elegidas: avisarlo y ofrecer ampliar la selección. |
+| `{ status: 'granted', android: { accuracy: 'coarse' } }` | Funciona con ubicación aproximada: no mostrar coordenadas exactas ("Ubicación aproximada"). |
+
+Los dos campos que deciden casi todo son `granted` (¿puedo usar la función ahora?) y `canAskAgain` (¿puedo mostrar el diálogo del sistema o debo mandar a Ajustes?).
+
+### D4. Simulación del ciclo completo
+
+Android 14, app recién instalada, `expo-location`:
+
+| # | Acción | `status` | `canAskAgain` | ¿Diálogo? |
+|---|---|---|---|---|
+| 1 | `getForegroundPermissionsAsync()` | `undetermined` | `true` | No |
+| 2 | `request…()` → "No permitir" | `denied` | `true` | Sí |
+| 3 | `request…()` → "No permitir" | `denied` | `false` | Sí |
+| 4 | `request…()` | `denied` | `false` | No |
+| 5 | `Linking.openSettings()` → habilita "Mientras la app está en uso" → vuelve y la app consulta | `granted` | `true` | No |
+| 6 | Igual que el 5, pero la app no vuelve a consultar | Sigue mostrando "bloqueado" (el estado guardado quedó desactualizado). | — | No |
+
+**En iOS (pasos 1 a 4):** el paso 1 es igual (`undetermined`). En el paso 2 el diálogo aparece una sola vez y queda `denied` con `canAskAgain: false`. Por eso el resultado cambia en el **paso 2** (en Android recién se bloquea en el paso 3): iOS no da una segunda oportunidad. Los pasos 3 y 4 no muestran diálogo. Si la persona elige "Permitir una vez" y después cierra y reabre la app, el permiso se pierde: vuelve a `undetermined` y el diálogo puede aparecer de nuevo.
+
+### D5. Configurar app.json
+
+```json
+{
+  "expo": {
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Usamos tu cámara para leer el código QR del aula.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Usamos tu ubicación para mostrarte los puntos de reciclaje cercanos."
+        }
+      ]
+    ],
+    "android": {
+      "blockedPermissions": ["android.permission.SYSTEM_ALERT_WINDOW"]
+    }
+  }
+}
+```
+
+`expo-camera` agrega `RECORD_AUDIO` por defecto porque el módulo también permite grabar video con sonido; la declaración se hace a nivel de librería, no según el uso real de tu app. Por eso hay que desactivarlo con `recordAudioAndroid: false`.
+
+### D6. Expo Go no es tu app
+
+**a)** Expo Go es **otra app** (con su propio `Info.plist` y manifiesto) que ejecuta tu código JavaScript: los textos de propósito de tu `app.json` no se compilan en ella, así que el diálogo muestra los textos genéricos de Expo Go.
+
+**b)** En Expo Go se pueden probar la cámara, la ubicación en primer plano, el selector de fotos y las notificaciones locales. Necesitan una development build: las notificaciones push en Android (desde SDK 53 no están en Expo Go), la ubicación en segundo plano y todo lo que dependa de tu `app.json` nativo (textos de propósito, `blockedPermissions`).
+
+**c)**
+
+```bash
+npx expo prebuild                # genera android/ e ios/
+npx expo run:android             # compila e instala la development build en Android
+# alternativa con EAS: eas build --profile development --platform android
+```
+
+**d)** Android: `adb shell pm reset-permissions` (todos) o `adb shell pm revoke <paquete> android.permission.CAMERA` (uno solo). Simulador de iOS: `xcrun simctl privacy booted reset all <bundle-id>` (o `reset camera <bundle-id>`).
