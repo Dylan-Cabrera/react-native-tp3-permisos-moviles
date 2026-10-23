@@ -285,3 +285,180 @@ npx expo run:android             # compila e instala la development build en And
 ```
 
 **d)** Android: `adb shell pm reset-permissions` (todos) o `adb shell pm revoke <paquete> android.permission.CAMERA` (uno solo). Simulador de iOS: `xcrun simctl privacy booted reset all <bundle-id>` (o `reset camera <bundle-id>`).
+
+## Parte E · Recetas: leer y corregir código
+
+### E1. Encontrá los errores (cámara)
+
+Errores:
+1. `permiso` es `null` en el primer render y `permiso.status` rompe la app.
+2. No hay estado de carga: el primer render debería mostrar un indicador.
+3. No contempla el estado **bloqueado** (`canAskAgain: false`): el botón "Permitir" no hace nada y la persona queda sin salida.
+4. `onPress={pedirPermiso}` le pasa el evento a la función; conviene envolverla en una función propia.
+5. El botón dice "Permitir" en vez de "Continuar" (el diálogo del sistema es el que permite).
+
+Versión corregida:
+
+```tsx
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { ActivityIndicator, Button, Linking } from 'react-native';
+
+export default function Escanear() {
+  const [permiso, pedirPermiso] = useCameraPermissions();
+
+  if (!permiso) return <ActivityIndicator />; // cargando
+
+  if (permiso.granted) {
+    return <CameraView style={{ flex: 1 }} facing="back" />; // concedido
+  }
+
+  if (permiso.canAskAgain) {
+    return ( // preguntable
+      <Explicacion texto="Usamos la cámara para leer el QR del aula.">
+        <Button title="Continuar" onPress={() => pedirPermiso()} />
+      </Explicacion>
+    );
+  }
+
+  return ( // bloqueado
+    <Explicacion texto="La cámara está bloqueada. Habilitala en Ajustes para leer el QR.">
+      <Button title="Abrir Ajustes" onPress={() => Linking.openSettings()} />
+    </Explicacion>
+  );
+}
+```
+
+### E2. El orden importa (ubicación)
+
+**a)** Se pide el permiso de segundo plano **antes** que el de primer plano. En iOS no hay escalonamiento posible: se pide "siempre" sin haber pasado por "al usar la app". En Android 11+ el de segundo plano debe pedirse por separado y **después** del de primer plano; si se pide antes, falla sin mostrar diálogo.
+
+**b)**
+
+```ts
+export async function activarSeguimiento() {
+  const enUso = await Location.requestForegroundPermissionsAsync();
+  if (!enUso.granted) return false;
+
+  const siempre = await Location.requestBackgroundPermissionsAsync();
+  return siempre.granted;
+}
+```
+
+**c)**
+
+```ts
+export async function obtenerUbicacion() {
+  try {
+    const permiso = await Location.requestForegroundPermissionsAsync();
+    if (!permiso.granted) return null;
+
+    const { coords } = await Location.getCurrentPositionAsync();
+    const aproximada =
+      permiso.android?.accuracy === 'coarse' || permiso.ios?.accuracy === 'reduced';
+    return { latitud: coords.latitude, longitud: coords.longitude, aproximada };
+  } catch {
+    return null;
+  }
+}
+```
+
+**d)** No: "farmacias cercanas" se resuelve con la app abierta, alcanza con primer plano. Si se pide segundo plano, Google Play exige una declaración en Play Console, un video que demuestre el uso y una justificación de que la función principal lo necesita.
+
+### E3. Notificaciones mudas
+
+**a)** Lo más probable es que **falte crear el canal** de notificaciones: en Android 13+ el diálogo de `POST_NOTIFICATIONS` solo aparece si antes se creó al menos un canal (`Notifications.setNotificationChannelAsync`). También hay que tener `POST_NOTIFICATIONS` declarado en el manifiesto.
+
+**b)** En Android 12 o anterior no existe ese permiso: las notificaciones están habilitadas por defecto (la persona puede silenciarlas desde Ajustes) y no hay diálogo.
+
+**c)** Las notificaciones **provisionales** (`allowProvisional: true`): se entregan en silencio al Centro de notificaciones sin diálogo previo. Se detectan con `ios.status === Notifications.IosAuthorizationStatus.PROVISIONAL`.
+
+**d)** Cuando la persona ve el beneficio: por ejemplo, un buen momento es al activar "Avisarme cuando se resuelva mi reporte" o al reservar un turno; un mal momento es al abrir la app por primera vez, sin contexto.
+
+### E4. Fotos sin pedir permiso
+
+| Necesidad | Herramienta | Permiso |
+|---|---|---|
+| Elegir una foto de perfil | `ImagePicker.launchImageLibraryAsync` (selector del sistema) | Ninguno |
+| Sacar una foto en el momento | `expo-camera` o `ImagePicker.launchCameraAsync` | Cámara |
+| Editor que muestra toda la galería | `expo-media-library` | Acceso a fotos y videos (`READ_MEDIA_IMAGES` / `NSPhotoLibraryUsageDescription`) |
+| Adjuntar la foto de un comprobante | `ImagePicker.launchImageLibraryAsync` o `DocumentPicker` | Ninguno |
+
+Google Play restringe `READ_MEDIA_IMAGES` y `READ_MEDIA_VIDEO` desde el **28 de mayo de 2025**, porque dan acceso a toda la galería: solo se permiten a apps cuya función principal lo requiera (galerías, editores). "El mejor permiso" es el **menor acceso que cumple la tarea**: muchas veces, ninguno (selector del sistema).
+
+### E5. Volver de Ajustes
+
+```ts
+import { useEffect, useRef } from 'react';
+import { AppState } from 'react-native';
+
+export function useRevisarAlVolver(revisar: () => void) {
+  const anterior = useRef(AppState.currentState);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nuevo) => {
+      const estabaAfuera = anterior.current.match(/inactive|background/);
+      if (estabaAfuera && nuevo === 'active') revisar();
+      anterior.current = nuevo;
+    });
+    return () => sub.remove();
+  }, [revisar]);
+}
+```
+
+**a)** Porque el hook lee el estado al montarse y cuando se llama a `request…()`; no hay un evento del sistema que avise que la persona cambió el permiso en Ajustes. Hay que volver a consultarlo al volver a primer plano.
+
+**b)** La función de consulta del hook: `consultarPermiso` (el tercer elemento de `useCameraPermissions()`), que lee el estado sin mostrar diálogo.
+
+**c)** Porque el permiso puede cambiar fuera de la app (Ajustes, "Solo esta vez", revocación automática de permisos no usados): un valor guardado "para siempre" queda desactualizado. Conviene consultar el estado real al volver a primer plano.
+
+## Parte F · Buenas prácticas y tiendas
+
+### F1. Pedir en contexto
+
+| App y permiso | ¿Cuándo pedirlo? | Alternativa si lo deniegan |
+|---|---|---|
+| Delivery · ubicación | Al tocar "Usar mi ubicación" en la pantalla de dirección. | Escribir la dirección a mano. |
+| Billetera virtual · cámara | Al tocar "Escanear QR para pagar". | Ingresar el alias o CVU a mano. |
+| Red social · contactos | Al tocar "Encontrar amigos". | Buscar por nombre o usuario, o compartir un enlace de invitación. |
+| Mensajería · micrófono | Al mantener presionado el botón de nota de voz. | Escribir el mensaje de texto. |
+| Turnos médicos · notificaciones | Al confirmar un turno ("¿Querés un recordatorio?"). | Ver los turnos y recordatorios dentro de la app o por correo. |
+| Editor de fotos · galería completa | Al abrir la pestaña "Mi galería". | Selector del sistema para elegir fotos una por una. |
+
+Pedir cuatro permisos al abrir la app "entrena el No permitir automático": la persona todavía no entiende para qué sirve cada uno, rechaza todo por reflejo y después ya no puede volver a decidir con información (y en iOS no hay segunda oportunidad).
+
+### F2. La pantalla previa
+
+**a)** Un título/beneficio claro en una frase, qué dato se usa y para qué (con un ícono o ilustración), y un único botón "Continuar" (más la aclaración de que se puede cambiar en Ajustes).
+
+**b)** Porque quien permite es el diálogo del sistema: "Permitir" sugiere que ya está concedido y confunde si después aparece otro diálogo. "Continuar" solo avanza al paso siguiente.
+
+**c)** La pauta 5.1.1(iv) de Apple indica que la app no puede ofrecer botones como "Ahora no" o "Cerrar" que eviten mostrar el diálogo del sistema o impidan avanzar en esa pantalla previa: debe llevar siempre al diálogo.
+
+**d)** Si el permiso está bloqueado, la pantalla explica cómo habilitarlo en Ajustes (camino exacto) y el botón pasa a ser "Abrir Ajustes", porque el diálogo ya no puede aparecer.
+
+### F3. Mínimo privilegio
+
+**a)** Ubicación **aproximada**: unos 3 km² alcanzan para encontrar los puntos del barrio.
+**b)** **"Siempre"** (segundo plano): con el celular en el bolsillo la app no está en uso; es de los pocos casos que lo justifican.
+**c)** **Selector del sistema** (`launchImageLibraryAsync`): no pide permiso de galería y solo accede a la foto elegida.
+**d)** **Sin micrófono** (`microphonePermission: false`, `recordAudioAndroid: false`): escanear un QR no usa sonido.
+
+### F4. Tiendas
+
+**a)** Google Play: declarar los permisos sensibles (ubicación en segundo plano, fotos y videos) en Play Console y cumplir el `targetSdkVersion` exigido; contar con una política de privacidad. App Store: textos de propósito claros (pauta 5.1.1) y formulario de privacidad en App Store Connect ("etiquetas de privacidad"); además, el manifiesto de privacidad.
+
+**b)** Es un archivo que declara qué datos recopila la app o sus librerías y qué APIs de "motivo requerido" usa. En Expo se configura en `ios.privacyManifests` de `app.json`.
+
+**c)** Android 17 suma el **selector de contactos** del sistema (Contact Picker), que no necesita permiso. Desde el 27/01/2027 Google Play va a exigir a las apps que hoy piden `READ_CONTACTS` migrar a ese selector, salvo las que justifiquen el acceso amplio.
+
+### F5. Errores comunes
+
+**a)** *Causa:* falta el texto de propósito (`NS…UsageDescription`) del recurso que se usa. *Solución:* agregarlo en el plugin o en `ios.infoPlist` de `app.json` y generar una nueva build.
+
+**b)** *Causa:* Expo Go no usa tu manifiesto; en la development build faltan los permisos declarados o el plugin no está configurado (o `blockedPermissions` quitó el permiso). *Solución:* revisar `app.json`, regenerar con `npx expo prebuild --clean` y recompilar.
+
+**c)** *Causa:* la app no vuelve a consultar el permiso al regresar de Ajustes y conserva el estado viejo. *Solución:* usar `AppState` (`useRevisarAlVolver`) para llamar a `consultarPermiso` al volver a primer plano.
+
+**d)** *Causa:* `request…()` se llama en el cuerpo del componente o en un efecto sin control, y se repite en cada render. *Solución:* pedir solo desde un evento (botón "Continuar") y mostrar el estado según `permiso`.
+
+**e)** *Causa:* se trata a las notificaciones como requisito para usar la app. *Solución:* la app debe funcionar igual y ofrecer una alternativa (bandeja de avisos dentro de la app); las notificaciones son una mejora, no una condición.
